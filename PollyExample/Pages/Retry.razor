@@ -1,0 +1,102 @@
+﻿@page "/retry"
+@using System.Linq
+@using System.Net.Http.Json
+@using Newtonsoft.Json
+@using Polly
+@using Polly.Contrib.WaitAndRetry
+@using Polly.Extensions.Http
+@using Polly.Retry
+@using PollyExample.Services
+@using WeatherForecastService
+
+@inject HttpClient httpClient
+
+<h1>Retry</h1>
+
+<p>Maximal 10 Versuche, inkl. Jitter</p>
+<p>Auch als RetryForever möglich</p>
+
+<table class="table">
+    <thead>
+    <tr>
+        <th>Versuch</th>
+        <th>Zeit</th>
+        <th>Meldung</th>
+    </tr>
+    </thead>
+    <tbody>
+    @foreach (var fetchError in errors)
+    {
+        <tr>
+            <td>@fetchError.Item1</td>
+            <td>@fetchError.Item2</td>
+            <td>@fetchError.Item3</td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@if (forecasts == null)
+{
+    <p>
+        <em>Loading...</em>
+    </p>
+}
+else
+{
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Date</th>
+            <th>Temp. (C)</th>
+            <th>Temp. (F)</th>
+            <th>Summary</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var forecast in forecasts)
+        {
+            <tr>
+                <td>@forecast.Date.ToShortDateString()</td>
+                <td>@forecast.TemperatureC</td>
+                <td>@forecast.TemperatureF</td>
+                <td>@forecast.Summary</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private WeatherForecast[] forecasts;
+    private List<Tuple<string, string, string>> errors = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var delay = Backoff.DecorrelatedJitterBackoffV2(TimeSpan.FromSeconds(1), 10);
+
+        var retryPolicy = HttpPolicyExtensions 
+            // Handle HttpRequestExceptions, 408 and 5xx status codes
+            .HandleTransientHttpError()
+            // Handle 404 not found
+            .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.NotFound)
+            // Handle 401 Unauthorized
+            .OrResult(msg => msg.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            .WaitAndRetryAsync(delay, (message, timespan, counter, context) =>
+            {
+                errors.Add(new Tuple<string, string, string>(
+                    counter.ToString(),
+                    timespan.ToString(),
+                    message.Exception.Message));
+
+                InvokeAsync(StateHasChanged);
+            });
+
+        var response = await retryPolicy.ExecuteAsync(() => httpClient.GetAsync("https://localhost:5001/WeatherForecast"));
+        
+        var responseBody = await response.Content.ReadAsStringAsync();
+      
+        forecasts = JsonConvert.DeserializeObject<IEnumerable<WeatherForecast>>(responseBody)?.ToArray();
+    }
+
+}

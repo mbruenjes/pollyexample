@@ -1,0 +1,105 @@
+﻿@page "/fallback"
+@using System.Linq
+@using System.Net.Http.Json
+@using Newtonsoft.Json
+@using Polly
+@using Polly.Contrib.WaitAndRetry
+@using Polly.Extensions.Http
+@using Polly.Retry
+@using PollyExample.Services
+@using WeatherForecastService
+
+@inject HttpClient httpClient
+
+<h1>Fallback</h1>
+
+<p>Liefere bei einem Fehler einen Fallback-Wert zurück</p>
+
+<table class="table">
+    <thead>
+    <tr>
+        <th>Versuch</th>
+        <th>Zeit</th>
+        <th>Meldung</th>
+    </tr>
+    </thead>
+    <tbody>
+    @foreach (var fetchError in errors)
+    {
+        <tr>
+            <td>@fetchError.Item1</td>
+            <td>@fetchError.Item2</td>
+            <td>@fetchError.Item3</td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@if (forecasts == null)
+{
+    <p>
+        <em>Loading...</em>
+    </p>
+}
+else
+{
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Date</th>
+            <th>Temp. (C)</th>
+            <th>Temp. (F)</th>
+            <th>Summary</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var forecast in forecasts)
+        {
+            <tr>
+                <td>@forecast.Date.ToShortDateString()</td>
+                <td>@forecast.TemperatureC</td>
+                <td>@forecast.TemperatureF</td>
+                <td>@forecast.Summary</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private WeatherForecast[] forecasts;
+    private List<Tuple<string, string, string>> errors = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var fallbackPolicy = Policy<IEnumerable<WeatherForecast>>
+            .Handle<Exception>()
+            .FallbackAsync(new List<WeatherForecast>()
+            {
+                new()
+                {
+                    Date = DateTime.Now,
+                    Summary = "Sunny Fallback",
+                    TemperatureC = -12
+                }
+            }, (result, context) => 
+        {
+            return Task.Run(() =>
+            {
+                errors.Add(new Tuple<string, string, string>("1", String.Empty, "Fallback durchgeführt"));
+            });
+        });
+
+        var result = await fallbackPolicy.ExecuteAsync(async () =>
+        {
+            var response = await httpClient.GetAsync("https://localhost:5001/WeatherForecast");
+            
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            return JsonConvert.DeserializeObject<IEnumerable<WeatherForecast>>(responseBody);
+        });
+
+        forecasts = result.ToArray();
+    }
+
+}
